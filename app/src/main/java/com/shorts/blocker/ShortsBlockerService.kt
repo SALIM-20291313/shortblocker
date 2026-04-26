@@ -15,7 +15,7 @@ import java.util.Locale
 class ShortsBlockerService : AccessibilityService() {
 
     private lateinit var prefs: SharedPreferences
-    private val MAX_SHORTS_DAILY = 5
+    private val MAX_SHORTS_DAILY = 0
     private var isCurrentlyInShorts = false
     private var lastToastTime = 0L
 
@@ -62,7 +62,7 @@ class ShortsBlockerService : AccessibilityService() {
             } else {
                 // Hakkı yoksa daha girerken at
                 isCurrentlyInShorts = true
-                showToastMessage("🚫 GÜNLÜK SHORTS LİMİTİNİZ DOLDU!")
+                showToastMessage("🚫 YouTube Shorts Kısıtlandı!")
                 performGlobalAction(GLOBAL_ACTION_BACK)
             }
         } else {
