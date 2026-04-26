@@ -14,11 +14,11 @@ class ShortsBlockerService : AccessibilityService() {
 
         val rootNode = rootInActiveWindow ?: return
 
-        // Ekranda Shorts kelimesi var mı diye derin tarama yap
+        // Ekranda Shorts kelimesi var mı diye mantıklı bir derin tarama yap
         val foundShorts = isShortsVisible(rootNode)
         
         if (foundShorts) {
-            // Eğer Shorts yakalanırsa doğrudan "GERİ" tuşuna basılıyormuş gibi yap
+            // Eğer Shorts yakalanırsa ve Ana Sayfa değilse doğrudan "GERİ" tuşuna bas
             performGlobalAction(GLOBAL_ACTION_BACK)
         }
     }
@@ -26,30 +26,70 @@ class ShortsBlockerService : AccessibilityService() {
     private fun isShortsVisible(node: AccessibilityNodeInfo?): Boolean {
         if (node == null) return false
 
-        // İçerik açıklamasında veya text'te Shorts kelimesi geçiyorsa true döner
-        val contentDesc = node.contentDescription?.toString()?.lowercase()
-        val text = node.text?.toString()?.lowercase()
+        val textContent = HashSet<String>()
+        val selectedNodes = HashSet<String>()
+        val resourceIds = HashSet<String>()
+        
+        extractData(node, textContent, selectedNodes, resourceIds)
 
-        // YouTube, Shorts tabında ve oynatıcısında "shorts" kelimesini sıkça identifier olarak kullanır
-        if ((contentDesc != null && contentDesc.contains("shorts")) ||
-            (text != null && text.contains("shorts"))) {
-            
-            // Eğer alt menüdeki genel Shorts butonu değil de, 
-            // gerçekten Shorts izleniyorsa ya da Shorts sayfası açıldıysa engelle
-            // Agresif modda olduğu için her türlü "Shorts" yazan yere tıklandığında geri atar.
+        // 1. Ana Menü Kontrolü: 
+        // Eğer kullanıcı YouTube uygulamasını ilk açtığında alt menüde "Ana Sayfa" (veya Home) butonu seçili ve aktifse
+        // Biz ana sayfadayızdır. Ana sayfada da "Shorts" butonu göründüğü için yanlışlıkla engellemeyi önlemek adına:
+        val isHomeSelected = selectedNodes.any { it.contains("ana sayfa") || it.contains("home") || it.contains("abonelikler") }
+        if (isHomeSelected) {
+            return false 
+        }
+
+        // 2. Shorts Sekmesi Kontrolü:
+        // Eğer alttaki "Shorts" sekmesi / butonu bizzat DOKUNULUP SEÇİLMİŞSE (isSelected = true)
+        val isShortsSelected = selectedNodes.any { it.contains("shorts") || it.contains("kısa videolar") }
+        if (isShortsSelected) {
             return true
         }
 
-        // Alt elemanları özyinelemeli olarak kontrol et
-        for (i in 0 until node.childCount) {
-            if (isShortsVisible(node.getChild(i))) {
-                return true
-            }
+        // 3. Shorts Player (Oynatıcı) Kontrolü:
+        // Eğer sekme görünmüyorsa ama arka plandaki Android bileşenlerinin isimlerinde(ID) "reel" (Shorts'un kod adı) 
+        // veya "shorts_player" gibi ifadeler geçiyorsa, kişi tam ekran bir Shorts videosunun içine dalmıştır.
+        val hasReelPlayer = resourceIds.any { 
+            it.contains("reel_player") || 
+            it.contains("reel_recycler") || 
+            it.contains("shorts_player") ||
+            it.contains("reel_viewer")
         }
+        
+        // Eğer sadece ekranda shorts yazıyorsa ama sekme seçili değilse 
+        // (örneğin arama sonuçlarında shorts başlığı varsa) ana sayfayı kilitlememesi için sadece oynatıcı aktifse engelle.
+        if (hasReelPlayer) {
+            return true
+        }
+
         return false
     }
 
+    private fun extractData(node: AccessibilityNodeInfo?, texts: HashSet<String>, selected: HashSet<String>, ids: HashSet<String>) {
+        if (node == null) return
+
+        val text = node.text?.toString()?.lowercase() ?: ""
+        val contentDesc = node.contentDescription?.toString()?.lowercase() ?: ""
+        val viewId = node.viewIdResourceName?.toString()?.lowercase() ?: ""
+
+        if (text.isNotEmpty()) texts.add(text)
+        if (contentDesc.isNotEmpty()) texts.add(contentDesc)
+        if (viewId.isNotEmpty()) ids.add(viewId)
+
+        // Eğer bu ekran bileşeni "Seçili (Tıklanmış/Aktif)" bir sekme ise onu not alalım:
+        if (node.isSelected) {
+            if (text.isNotEmpty()) selected.add(text)
+            if (contentDesc.isNotEmpty()) selected.add(contentDesc)
+        }
+
+        // O ekrandaki tüm düğmeleri (butonlar, yazılar, videolar vb.) teker teker tarayarak gez.
+        for (i in 0 until node.childCount) {
+            extractData(node.getChild(i), texts, selected, ids)
+        }
+    }
+
     override fun onInterrupt() {
-        // Servis kesintiye uğradığında yapılacak işlemler (boş bırakılabilir)
+        // Servis kesintiye uğradığında
     }
 }
