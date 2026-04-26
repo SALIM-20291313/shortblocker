@@ -29,20 +29,25 @@ class ShortsBlockerService : AccessibilityService() {
         if (event == null) return
         val packageName = event.packageName?.toString() ?: return
 
-        // Sadece YouTube üzerindeysek ilgilenelim
-        if (packageName != "com.google.android.youtube") {
-            isCurrentlyInShorts = false // Youtube dışı sıfırla
-            return
-        }
-
-        val rootNode = rootInActiveWindow ?: return
-        val foundShortsPlayer = isShortsPlayerActive(rootNode)
-        
-        if (foundShortsPlayer) {
-            handleShortsDetection()
-        } else {
-            // Eğer Shorts oyuncusu görünmüyorsa "çıktığını" algılar.
+        if (packageName == "com.google.android.youtube") {
+            val rootNode = rootInActiveWindow ?: return
+            val foundShortsPlayer = isShortsPlayerActive(rootNode)
+            
+            if (foundShortsPlayer) {
+                handleShortsDetection()
+            } else {
+                isCurrentlyInShorts = false 
+            }
+        } else if (packageName == "com.android.chrome") {
             isCurrentlyInShorts = false 
+            val rootNode = rootInActiveWindow ?: return
+            
+            if (isChromeIncognitoActive(rootNode)) {
+                showToastMessage("🚫 Gizli Sekme Kısıtlandı!")
+                performGlobalAction(GLOBAL_ACTION_BACK)
+            }
+        } else {
+            isCurrentlyInShorts = false
         }
     }
 
@@ -81,6 +86,34 @@ class ShortsBlockerService : AccessibilityService() {
             // Gün gece 00:00 i geçmiş, hakkını 5'e geri doldur
             prefs.edit().putString("last_date", currentDate).putInt("daily_count", 0).apply()
         }
+    }
+
+    private fun isChromeIncognitoActive(node: AccessibilityNodeInfo?): Boolean {
+        if (node == null) return false
+
+        // Güvenlik: Kullanıcı verilerini sızdırmamak için okunan metinler KESİNLİKLE kaydedilmez veya loglanmaz.
+        // Sadece bellekte anlık olarak kısıtlama hedefiyle karşılaştırılır.
+        val text = node.text?.toString()?.lowercase()?.trim() ?: ""
+        val contentDesc = node.contentDescription?.toString()?.lowercase()?.trim() ?: ""
+
+        // Chrome menüsündeki "Yeni gizli sekme" öğesi veya Chrome İngilizce menü öğesi
+        if (text == "yeni gizli sekme" || text == "new incognito tab") {
+            return true
+        }
+
+        // Açık olan bir gizli sekmeyi yakalamak için ikonların açıklamasını kontrol et
+        if (contentDesc == "gizli sekme" || contentDesc == "incognito tab" || contentDesc == "gizli sekmeler" || contentDesc == "incognito tabs") {
+            return true
+        }
+
+        // Alt düğümleri (child nodes) tara
+        for (i in 0 until node.childCount) {
+            if (isChromeIncognitoActive(node.getChild(i))) {
+                return true
+            }
+        }
+
+        return false
     }
 
     private fun isShortsPlayerActive(node: AccessibilityNodeInfo?): Boolean {
