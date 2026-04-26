@@ -1,95 +1,142 @@
 package com.shorts.blocker
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Context
+import android.content.SharedPreferences
+import android.os.Handler
+import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.Toast
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class ShortsBlockerService : AccessibilityService() {
 
+    private lateinit var prefs: SharedPreferences
+    private val MAX_SHORTS_DAILY = 5
+    private var isCurrentlyInShorts = false
+    private var lastToastTime = 0L
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        prefs = getSharedPreferences("ShortsBlockerPrefs", Context.MODE_PRIVATE)
+        checkAndResetDailyCounter()
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-
         val packageName = event.packageName?.toString() ?: return
-        if (packageName != "com.google.android.youtube") return
+
+        // Sadece YouTube üzerindeysek ilgilenelim
+        if (packageName != "com.google.android.youtube") {
+            isCurrentlyInShorts = false // Youtube dışı sıfırla
+            return
+        }
 
         val rootNode = rootInActiveWindow ?: return
-
-        // Ekranda Shorts kelimesi var mı diye mantıklı bir derin tarama yap
-        val foundShorts = isShortsVisible(rootNode)
+        val foundShortsPlayer = isShortsPlayerActive(rootNode)
         
-        if (foundShorts) {
-            // Eğer Shorts yakalanırsa ve Ana Sayfa değilse doğrudan "GERİ" tuşuna bas
-            performGlobalAction(GLOBAL_ACTION_BACK)
+        if (foundShortsPlayer) {
+            handleShortsDetection()
+        } else {
+            // Eğer Shorts oyuncusu görünmüyorsa "çıktığını" algılar.
+            isCurrentlyInShorts = false 
         }
     }
 
-    private fun isShortsVisible(node: AccessibilityNodeInfo?): Boolean {
+    private fun handleShortsDetection() {
+        val currentCount = prefs.getInt("daily_count", 0)
+
+        if (!isCurrentlyInShorts) {
+            // İlk kez shorts player'a girdiğinde kotaları düş
+            checkAndResetDailyCounter()
+
+            if (currentCount < MAX_SHORTS_DAILY) {
+                // Haklarını kullanmaya başla
+                val newCount = currentCount + 1
+                prefs.edit().putInt("daily_count", newCount).apply()
+                isCurrentlyInShorts = true
+                showToastMessage("Shorts Hakkı Kullanıldı! (Kalan: ${MAX_SHORTS_DAILY - newCount})")
+            } else {
+                // Hakkı yoksa daha girerken at
+                isCurrentlyInShorts = true
+                showToastMessage("🚫 GÜNLÜK SHORTS LİMİTİNİZ DOLDU!")
+                performGlobalAction(GLOBAL_ACTION_BACK)
+            }
+        } else {
+            // Halihazırda Shorts'un içindeyse sadece limite takılıyorsa engelle
+            if (currentCount >= MAX_SHORTS_DAILY) {
+                performGlobalAction(GLOBAL_ACTION_BACK)
+            }
+        }
+    }
+
+    private fun checkAndResetDailyCounter() {
+        val currentDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+        val savedDate = prefs.getString("last_date", "")
+        
+        if (currentDate != savedDate) {
+            // Gün gece 00:00 i geçmiş, hakkını 5'e geri doldur
+            prefs.edit().putString("last_date", currentDate).putInt("daily_count", 0).apply()
+        }
+    }
+
+    private fun isShortsPlayerActive(node: AccessibilityNodeInfo?): Boolean {
         if (node == null) return false
 
-        val textContent = HashSet<String>()
         val selectedNodes = HashSet<String>()
         val resourceIds = HashSet<String>()
         
-        extractData(node, textContent, selectedNodes, resourceIds)
+        extractData(node, selectedNodes, resourceIds)
 
-        // 1. Ana Menü Kontrolü: 
-        // Eğer kullanıcı YouTube uygulamasını ilk açtığında alt menüde "Ana Sayfa" (veya Home) butonu seçili ve aktifse
-        // Biz ana sayfadayızdır. Ana sayfada da "Shorts" butonu göründüğü için yanlışlıkla engellemeyi önlemek adına:
-        val isHomeSelected = selectedNodes.any { it.contains("ana sayfa") || it.contains("home") || it.contains("abonelikler") }
-        if (isHomeSelected) {
-            return false 
-        }
-
-        // 2. Shorts Sekmesi Kontrolü:
-        // Eğer alttaki "Shorts" sekmesi / butonu bizzat DOKUNULUP SEÇİLMİŞSE (isSelected = true)
-        val isShortsSelected = selectedNodes.any { it.contains("shorts") || it.contains("kısa videolar") }
-        if (isShortsSelected) {
-            return true
-        }
-
-        // 3. Shorts Player (Oynatıcı) Kontrolü:
-        // Eğer sekme görünmüyorsa ama arka plandaki Android bileşenlerinin isimlerinde(ID) "reel" (Shorts'un kod adı) 
-        // veya "shorts_player" gibi ifadeler geçiyorsa, kişi tam ekran bir Shorts videosunun içine dalmıştır.
+        // SIZMA YAMASI: Yatay raf veya herhangi bir yerden doğrudan Shorts izleyicisine geçilmişse "Ana Sayfa" istisnasını sildik! 
         val hasReelPlayer = resourceIds.any { 
             it.contains("reel_player") || 
-            it.contains("reel_recycler") || 
             it.contains("shorts_player") ||
+            (it.contains("reel") && it.contains("video_player")) ||
+            it.contains("reel_recycler") ||
             it.contains("reel_viewer")
         }
-        
-        // Eğer sadece ekranda shorts yazıyorsa ama sekme seçili değilse 
-        // (örneğin arama sonuçlarında shorts başlığı varsa) ana sayfayı kilitlememesi için sadece oynatıcı aktifse engelle.
-        if (hasReelPlayer) {
-            return true
-        }
+
+        if (hasReelPlayer) return true
+
+        // Alternatif yakalama mekanizması (Alt Shorts Taba basıldıysa)
+        val isShortsSelected = selectedNodes.any { it.contains("shorts") || it.contains("kısa videolar") }
+        if (isShortsSelected) return true
 
         return false
     }
 
-    private fun extractData(node: AccessibilityNodeInfo?, texts: HashSet<String>, selected: HashSet<String>, ids: HashSet<String>) {
+    private fun extractData(node: AccessibilityNodeInfo?, selected: HashSet<String>, ids: HashSet<String>) {
         if (node == null) return
 
         val text = node.text?.toString()?.lowercase() ?: ""
         val contentDesc = node.contentDescription?.toString()?.lowercase() ?: ""
         val viewId = node.viewIdResourceName?.toString()?.lowercase() ?: ""
 
-        if (text.isNotEmpty()) texts.add(text)
-        if (contentDesc.isNotEmpty()) texts.add(contentDesc)
         if (viewId.isNotEmpty()) ids.add(viewId)
 
-        // Eğer bu ekran bileşeni "Seçili (Tıklanmış/Aktif)" bir sekme ise onu not alalım:
         if (node.isSelected) {
             if (text.isNotEmpty()) selected.add(text)
             if (contentDesc.isNotEmpty()) selected.add(contentDesc)
         }
 
-        // O ekrandaki tüm düğmeleri (butonlar, yazılar, videolar vb.) teker teker tarayarak gez.
         for (i in 0 until node.childCount) {
-            extractData(node.getChild(i), texts, selected, ids)
+            extractData(node.getChild(i), selected, ids)
         }
     }
 
-    override fun onInterrupt() {
-        // Servis kesintiye uğradığında
+    private fun showToastMessage(message: String) {
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastToastTime > 3000) { 
+            lastToastTime = currentTime
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show()
+            }
+        }
     }
+
+    override fun onInterrupt() {}
 }
