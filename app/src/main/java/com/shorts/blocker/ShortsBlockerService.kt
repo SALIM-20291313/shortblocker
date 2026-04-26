@@ -96,8 +96,9 @@ class ShortsBlockerService : AccessibilityService() {
         val text = node.text?.toString()?.lowercase()?.trim() ?: ""
         val contentDesc = node.contentDescription?.toString()?.lowercase()?.trim() ?: ""
 
-        // Chrome menüsündeki "Yeni gizli sekme" öğesi veya Chrome İngilizce menü öğesi
-        if (text == "yeni gizli sekme" || text == "new incognito tab") {
+        // Menüyü (3 nokta) engellememek için "yeni gizli sekme" metnini aramayı kaldırdık.
+        // Bunun yerine, sekme açıldığında ekranda çıkan büyük yazıyı veya ikonları kontrol ediyoruz.
+        if (text == "gizli sekmedesiniz" || text == "you've gone incognito" || text == "gizli sekme açtınız") {
             return true
         }
 
